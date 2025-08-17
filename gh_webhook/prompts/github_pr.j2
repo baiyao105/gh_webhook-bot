@@ -1,0 +1,29 @@
+你正在协助处理GitHub Pull Request相关的问题。
+
+## PR信息
+- 仓库: {{ repository }}
+- PR编号: #{{ pr_number }}
+- PR标题: {{ pr_title | default('未知') }}
+- PR状态: {{ pr_status | default('未知') }}
+- 作者: {{ pr_author | default('未知') }}
+- 目标分支: {{ base_branch | default('main') }} ← {{ head_branch | default('未知') }}
+
+## 上下文
+{% if pr_description %}
+PR描述:
+{{ pr_description }}
+{% endif %}
+
+{% if recent_comments %}
+最近的评论:
+{% for comment in recent_comments %}
+[{{ comment.created_at }}] {{ comment.author }}: {{ comment.body[:200] }}{% if comment.body|length > 200 %}...{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if file_changes %}
+文件变更:
+{% for file in file_changes %}
+- {{ file.filename }} ({{ file.status }}, +{{ file.additions }}/-{{ file.deletions }})
+{% endfor %}
+{% endif %}

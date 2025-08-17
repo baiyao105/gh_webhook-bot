@@ -1,0 +1,30 @@
+你正在协助处理GitHub Issue相关的问题。
+
+## Issue信息
+- 仓库: {{ repository }}
+- Issue编号: #{{ issue_number }}
+- Issue标题: {{ issue_title | default('未知') }}
+- Issue状态: {{ issue_status | default('未知') }}
+- 作者: {{ issue_author | default('未知') }}
+- 标签: {{ labels | join(', ') if labels else '无' }}
+- 里程碑: {{ milestone | default('无') }}
+
+## 上下文
+{% if issue_description %}
+Issue描述:
+{{ issue_description }}
+{% endif %}
+
+{% if recent_comments %}
+最近的评论:
+{% for comment in recent_comments %}
+[{{ comment.created_at }}] {{ comment.author }}: {{ comment.body[:200] }}{% if comment.body|length > 200 %}...{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if related_prs %}
+相关PR:
+{% for pr in related_prs %}
+- #{{ pr.number }}: {{ pr.title }} ({{ pr.status }})
+{% endfor %}
+{% endif %}
