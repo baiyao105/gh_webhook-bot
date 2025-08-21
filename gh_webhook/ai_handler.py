@@ -571,7 +571,7 @@ class EnhancedAIHandler:
             max_tokens = ai_config.get("max_tokens", 2000)
             temperature = ai_config.get("temperature", 0.3)
             logger.debug(f"会话配置 [model={model}] [max_tokens={max_tokens}] [temperature={temperature}]")
-            max_turns = 15
+            max_turns = 25
             current_turn = 0
 
             messages = self._build_initial_messages(context, prompt)

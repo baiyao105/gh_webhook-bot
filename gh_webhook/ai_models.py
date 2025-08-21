@@ -262,7 +262,7 @@ class MultiTurnSession:
     session_id: str
     context: ConversationContext
     tool_calls: List[ToolCall] = field(default_factory=list)
-    max_turns: int = 5
+    max_turns: int = 25
     current_turn: int = 0
     allow_early_finish: bool = True
     session_data: Dict[str, Any] = field(default_factory=dict)
