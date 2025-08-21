@@ -696,32 +696,62 @@ class GitHubEventProcessor:
             summary = review_result.get("summary", review_result.get("review_content", "AI审查完成"))
             approved = review_result.get("approved", True)
             issues_count = review_result.get("issues_count", {})
+            detailed_analysis = review_result.get("detailed_analysis", "")
+            status = review_result.get("status", "commented")
+            review_time = review_result.get("review_time", "")
         else:
             score = getattr(review_result, "overall_score", 85)
             summary = getattr(review_result, "summary", getattr(review_result, "review_content", "AI审查完成"))
             approved = getattr(review_result, "approved", True)
             issues_count = getattr(review_result, "issues_count", {})
+            detailed_analysis = getattr(review_result, "detailed_analysis", "")
+            status = getattr(review_result, "status", "commented")
+            review_time = getattr(review_result, "review_time", "")
 
-        # 评分表情
+        # 评分表情和状态
         if score >= 90:
             score_emoji = "🎉"
+            status_text = "优秀"
         elif score >= 80:
             score_emoji = "✅"
+            status_text = "良好"
         elif score >= 70:
             score_emoji = "⚠️"
+            status_text = "一般"
         elif score >= 60:
             score_emoji = "❌"
+            status_text = "较差"
         else:
             score_emoji = "🚨"
+            status_text = "不合格"
+
+        # 状态图标
+        if status == "approved":
+            status_icon = "✅ 批准合并"
+        elif status == "changes_requested":
+            status_icon = "🔄 需要修改"
+        elif status == "failed":
+            status_icon = "❌ 审查失败"
+        else:
+            status_icon = "💬 已评论"
 
         comment_lines = [
             f"## {score_emoji} AI代码审查报告",
             "",
-            f"**总体评分**: {score:.1f}/100",
-            f"**审查状态**: {'✅ 通过' if approved else '❌ 需要改进'}",
+            f"**📊 总体评分**: {score:.1f}/100 ({status_text})",
+            f"**🎯 审查状态**: {status_icon}",
             "",
-            f"**总结**: {summary}",
+            f"**📝 审查总结**",
+            f"> {summary}",
         ]
+
+        # 添加详细分析（如果有且与总结不同）
+        if detailed_analysis and detailed_analysis != summary and len(detailed_analysis) > len(summary):
+            comment_lines.extend([
+                "",
+                f"**🔍 详细分析**",
+                f"{detailed_analysis}"
+            ])
 
         # 问题统计
         if any(count > 0 for count in issues_count.values()):
@@ -748,13 +778,75 @@ class GitHubEventProcessor:
         """创建行级评论"""
         line_comments = []
 
-        comments = review_result.comments
+        # 处理字典格式的review_result
+        if isinstance(review_result, dict):
+            comments = review_result.get("comments", [])
+        else:
+            comments = getattr(review_result, "comments", [])
+            
+        # 如果没有comments属性或为空，返回空列表
+        if not comments:
+            return line_comments
+            
         for comment in comments[:10]:  # 限制评论数量
             try:
+                # 处理字典格式的comment
+                if isinstance(comment, dict):
+                    file_path = comment.get("file_path", "")
+                    line_number = comment.get("line_number", 1)
+                    severity = comment.get("severity", "info")
+                    message = comment.get("message", "")
+                    suggestion = comment.get("suggestion", "")
+                    category = comment.get("category", "")
+                    confidence = comment.get("confidence", 0.0)
+                else:
+                    # 处理对象格式的comment
+                    file_path = getattr(comment, "file_path", "")
+                    line_number = getattr(comment, "line_number", 1)
+                    severity = getattr(comment, "severity", "info")
+                    message = getattr(comment, "message", "")
+                    suggestion = getattr(comment, "suggestion", "")
+                    category = getattr(comment, "category", "")
+                    confidence = getattr(comment, "confidence", 0.0)
+                    
+                    # 如果severity是枚举，获取其值
+                    if hasattr(severity, "value"):
+                        severity = severity.value
+                
+                # 构建更丰富的评论内容
+                severity_emoji = {
+                    "critical": "🚨",
+                    "high": "❌", 
+                    "error": "❌",
+                    "medium": "⚠️",
+                    "warning": "⚠️",
+                    "low": "ℹ️",
+                    "info": "ℹ️",
+                    "suggestion": "💡",
+                    "style": "🎨",
+                    "performance": "⚡",
+                    "security": "🔒"
+                }.get(str(severity).lower(), "ℹ️")
+                
+                body_parts = [f"{severity_emoji} **{str(severity).title()}**: {message}"]
+                
+                # 添加分类信息
+                if category:
+                    body_parts.append(f"📂 **分类**: {category}")
+                
+                # 添加置信度信息（如果大于0）
+                if confidence > 0:
+                    confidence_text = f"{confidence:.0%}" if confidence <= 1 else f"{confidence:.1f}"
+                    body_parts.append(f"🎯 **置信度**: {confidence_text}")
+                
+                # 添加建议
+                if suggestion:
+                    body_parts.extend(["", "💡 **建议**:", suggestion])
+                        
                 line_comment = ReviewComment(
-                    path=comment.file_path,
-                    line=comment.line_number,
-                    body=f"**{comment.severity.value.title()}**: {comment.message}\n\n{comment.suggestion or ''}",
+                    path=file_path,
+                    line=line_number,
+                    body="\n".join(body_parts),
                 )
                 line_comments.append(line_comment)
             except Exception as e:

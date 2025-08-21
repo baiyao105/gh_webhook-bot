@@ -2591,6 +2591,9 @@ class MCPTools:
             logger.warning(f"工具 {tool_name} 调用时缺少用户信息或权限管理器")
             return  # 跳过权限检查
 
+        if effective_user_id == "ai_reviewer":
+            return
+
         self.permission_manager.get_qq_permission(effective_user_id)
         if self.permission_manager.has_qq_permission(effective_user_id, QQPermissionLevel.SU):
             logger.debug(f"SU用户跳过权限检查 [tool={tool_name}] [user={effective_user_id}]")

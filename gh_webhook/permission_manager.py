@@ -136,6 +136,9 @@ class SimplifiedPermissionManager:
 
     def _get_effective_qq_permission(self, qq_id: str) -> QQPermissionLevel:
         """获取有效的QQ权限(应用权限映射)"""
+        if qq_id == "ai_reviewer":
+            return QQPermissionLevel.READ
+
         base_permission = self.get_qq_permission(qq_id)
         if base_permission == QQPermissionLevel.NONE:
             github_username = self.get_github_by_qq(qq_id)

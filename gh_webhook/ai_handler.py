@@ -1697,89 +1697,22 @@ class EnhancedAIHandler:
         return False
 
     async def review_code_changes(self, pull_request: Dict[str, Any], repository: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """审查部分
-        (因为原来的代码不小心给弄没了,
-        现在的代码只是摆着看的
-        """
+        """使用增强的AI审查引擎进行代码审查"""
         try:
-            repo_name = repository.get("full_name", "")
-            pr_number = pull_request.get("number")
-            pr_title = pull_request.get("title", "")
-            pr_body = pull_request.get("body", "")
-
-            logger.info(f"开始代码审查: {repo_name}#{pr_number}")
-            context_id = self._generate_context_id(
-                ContextType.GITHUB_PR_REVIEW,
-                repository=repo_name,
-                pr_number=pr_number
+            if not hasattr(self, '_review_engine'):
+                from .ai_review_engine import EnhancedAIReviewEngine
+                self._review_engine = EnhancedAIReviewEngine(self)
+            review_result = await self._review_engine.review_code_changes(
+                pull_request, repository
             )
-            context = self.context_manager.get_or_create_context(
-                context_id,
-                ContextType.GITHUB_PR_REVIEW,
-                metadata={
-                    "repository": repo_name,
-                    "pr_number": pr_number,
-                    "pr_title": pr_title
-                }
-            )
-            review_prompt = f"""请对以下Pull Request进行代码审查：
 
-**仓库**: {repo_name}
-**PR编号**: #{pr_number}
-**标题**: {pr_title}
-**描述**: {pr_body or "无描述"}
-
-请分析代码变更，提供建设性的反馈和建议。重点关注：
-1. 代码质量和最佳实践
-2. 潜在的bug或安全问题
-3. 性能优化建议
-4. 代码可读性和维护性
-
-请用友好、专业的语气提供审查意见。"""
-            try:
-                # 设置超时处理
-                ai_response = await asyncio.wait_for(
-                    self._generate_ai_response(
-                        context=context,
-                        current_message=review_prompt,
-                        user_id="ai_reviewer",
-                        github_username="ChimeYao-bot",
-                        user_permissions=["ai_review"]
-                    ),
-                    timeout=120  # 2分钟超时
-                )
-            except asyncio.TimeoutError:
-                logger.warning(f"AI审查超时，但可能仍有结果: {repo_name}#{pr_number}")
-                # 即使超时也尝试获取可能的响应
-                ai_response = None
-
-            if ai_response:
-                logger.success(f"代码审查完成: {repo_name}#{pr_number}")
-                return {
-                    "success": True,
-                    "review_content": ai_response,
-                    "repository": repo_name,
-                    "pr_number": pr_number,
-                    "context_id": context_id,
-                    "summary": ai_response,
-                    "overall_score": 85,
-                    "approved": True,
-                    "issues_count": {}
-                }
-            else:
-                logger.warning(f"代码审查未生成响应: {repo_name}#{pr_number}")
-                return {
-                    "success": False,
-                    "error": "AI审查未生成响应",
-                    "repository": repo_name,
-                    "pr_number": pr_number
-                }
-
-        except asyncio.TimeoutError:
-            logger.error(f"❌ AI代码审查超时: {repo_name}#{pr_number}")
-            return None
+            return review_result.to_dict()
+            
         except Exception as e:
             logger.error(f"❌ AI代码审查异常: {e}")
+            repo_name = repository.get("full_name", "")
+            pr_number = pull_request.get("number", 0)
+            
             return {
                 "success": False,
                 "error": str(e),
