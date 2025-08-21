@@ -1544,7 +1544,7 @@ class GitHubSearcher:
                 "state": state,
                 "sort": sort,
                 "direction": direction,
-                "per_page": min(limit, 100),
+                "per_page": min(limit, 600),
             }
             if labels:
                 params["labels"] = labels
@@ -1846,7 +1846,7 @@ class GitHubSearcher:
         issue_number: int,
         sort: str = "created",
         direction: str = "asc",
-        limit: int = 30,
+        limit: int = 600,
     ) -> List[Dict[str, Any]]:
         """列出Issue或PR的评论"""
         try:
@@ -1859,7 +1859,7 @@ class GitHubSearcher:
 
             session = await self._get_session()
             url = f"{self.base_url}/repos/{owner}/{repo}/issues/{issue_number}/comments"
-            params = {"sort": sort, "direction": direction, "per_page": min(limit, 100)}
+            params = {"sort": sort, "direction": direction, "per_page": min(limit, 600)}
 
             async with session.get(url, params=params) as response:
                 if response.status == 200:
@@ -2077,7 +2077,7 @@ class GitHubSearcher:
         direction: str = "desc",
         labels: Optional[str] = None,
         assignee: Optional[str] = None,
-        limit: int = 30,
+        limit: int = 600,
     ) -> Dict[str, Any]:
         """列出仓库的Issues"""
         try:
@@ -2096,7 +2096,7 @@ class GitHubSearcher:
                 "state": state,
                 "sort": sort,
                 "direction": direction,
-                "per_page": min(limit, 100),
+                "per_page": min(limit, 600),
             }
 
             if labels:
@@ -2596,8 +2596,30 @@ class MCPTools:
             logger.debug(f"SU用户跳过权限检查 [tool={tool_name}] [user={effective_user_id}]")
             return
 
-        if not self.permission_manager.check_mcp_write_permission(effective_user_id, tool_name):
-            raise MCPPermissionError(f"权限不足, 无法执行操作: {tool_name}")
+        read_operations = {
+            'get_pull_request', 'list_pull_requests', 'get_issue', 'list_issues',
+            'get_issue_comments', 'list_comments', 'search_code', 'get_file_content',
+            'list_repository_files', 'list_labels', 'get_repository_info',
+            'search_conversations', 'get_context_statistics', 'find_related_contexts'
+        }
+        
+        write_operations = {
+            'create_pull_request', 'update_pull_request', 'merge_pull_request',
+            'create_issue', 'update_issue', 'close_issue', 'add_comment',
+            'update_comment', 'delete_comment', 'create_label', 'add_labels_to_issue',
+            'remove_labels_from_issue', 'assign_issue', 'unassign_issue'
+        }
+
+        if tool_name in write_operations:
+            if not self.permission_manager.check_mcp_write_permission(effective_user_id, tool_name):
+                raise MCPPermissionError(f"权限不足, 需要 write 权限执行 {tool_name}")
+        elif tool_name in read_operations:
+            if not (self.permission_manager.has_qq_permission(effective_user_id, QQPermissionLevel.READ) or
+                   self.permission_manager.check_mcp_write_permission(effective_user_id, tool_name)):
+                raise MCPPermissionError(f"权限不足, 需要 read 权限执行 {tool_name}")
+        else:
+            if not self.permission_manager.check_mcp_write_permission(effective_user_id, tool_name):
+                raise MCPPermissionError(f"权限不足, 无法执行操作: {tool_name}")
 
         logger.debug(f"用户 {effective_user_id} 权限允许调用工具 {tool_name}")
 
@@ -2614,7 +2636,7 @@ class MCPTools:
 
         for old_permission in required_permissions:
             required_level = permission_mapping.get(old_permission, QQPermissionLevel.READ)
-            if not self.permission_manager.has_qq_permission(self.current_qq_id, required_level):
+            if not self.permission_manager.has_qq_permission(effective_user_id, required_level):
                 raise MCPPermissionError(f"权限不足, 需要 {required_level.value} 权限执行 {tool_name}")
 
     async def _call_github_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Any:

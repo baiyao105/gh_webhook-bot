@@ -427,6 +427,27 @@ class QQMessageSender:
             )
             return True
 
+        except ActionFailed as e:
+            logger.warning(f"引用提及消息发送失败(ActionFailed): {e}, 尝试发送简化版本")
+            try:
+                simplified_message_parts = []
+                if mention_segments:
+                    simplified_message_parts.extend(mention_segments)
+                    simplified_message_parts.append(MessageSegment.text(" "))
+                github_users_text = "、".join(mentioned_users)
+                simplified_message_parts.append(MessageSegment.text(f"📢 消息提及了: {github_users_text}"))
+                
+                simplified_message = Message(simplified_message_parts)
+                await bot.send_group_msg(group_id=int(group_id), message=simplified_message)
+                
+                logger.info(f"简化版提及消息发送成功: 群{group_id}, 提及用户: {mentioned_users}")
+                return True
+            except Exception as retry_e:
+                logger.error(f"简化版提及消息也发送失败: {retry_e}")
+                return False
+        except NetworkError as e:
+            logger.warning(f"网络错误导致引用提及消息发送失败: {e}")
+            return False
         except Exception as e:
             logger.error(f"发送引用提及消息失败: {e}")
             return False

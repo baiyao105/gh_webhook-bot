@@ -85,6 +85,8 @@ class WebhookProcessor:
         self.event_queue = asyncio.Queue(maxsize=1000)
         self.processing_task = None
         self.is_processing = False
+        self.active_reviews = set()  # 正在进行的审查: {"repo/name#pr_number"}
+        self.review_cache_max_size = 100
         # 支持的类型
         self.supported_events = {
             WebhookEventType.PUSH.value,
@@ -334,20 +336,31 @@ class WebhookProcessor:
 
     async def _process_event_queue(self):
         """处理事件队列"""
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        
         while self.is_processing:
             try:
                 event = await asyncio.wait_for(self.event_queue.get(), timeout=1.0)
                 await self._handle_single_event(event)
                 self.event_queue.task_done()
+                consecutive_errors = 0  # 重置错误计数
+                
             except asyncio.TimeoutError:
-                # 超时是正常的(
+                # 超时是正常的
                 continue
             except asyncio.CancelledError:
                 logger.info("处理任务被取消")
                 break
             except Exception as e:
-                logger.error(f"处理事件队列异常: {e}")
-                await asyncio.sleep(1)  # 睡大觉
+                consecutive_errors += 1
+                logger.error(f"处理事件队列异常 [连续错误: {consecutive_errors}/{max_consecutive_errors}]: {e}")
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.warning(f"连续错误过多，暂停处理 30 秒")
+                    await asyncio.sleep(30)
+                    consecutive_errors = 0
+                else:
+                    await asyncio.sleep(min(consecutive_errors * 2, 10))  # 指数退避，最多10秒
 
     async def _handle_single_event(self, event: WebhookEvent):
         """处理单个事件"""
@@ -501,6 +514,11 @@ class WebhookProcessor:
 
             bot_requested = bot_username in requested_reviewers
             if action == "review_requested" and bot_requested:
+                review_key = f"{event.repository}#{pr_number}"
+                if review_key in self.active_reviews:
+                    logger.info(f"PR {review_key} 已在审查中, 跳过重复请求")
+                    return True
+
                 if self.unified_ai_handler and hasattr(self.unified_ai_handler, "review_code_changes"):
                     mcp_ready = False
                     if hasattr(self.unified_ai_handler, "mcp_tools") and self.unified_ai_handler.mcp_tools:
@@ -516,6 +534,13 @@ class WebhookProcessor:
                             )
 
                     if mcp_ready:
+                        self.active_reviews.add(review_key)
+                        if len(self.active_reviews) > self.review_cache_max_size:
+                            # 移除最旧的一些条目(简单实现)
+                            excess = len(self.active_reviews) - self.review_cache_max_size
+                            for _ in range(excess):
+                                self.active_reviews.pop()
+
                         asyncio.create_task(self._perform_ai_review(event.repository, pr_number, pr))
                         logger.info(f"🤖 {bot_username} 被请求审核 PR {event.repository}#{pr_number}, 启动审查")
                     else:
@@ -598,7 +623,8 @@ class WebhookProcessor:
             logger.error(f"检查和隐藏过时审查异常: {e}")
 
     async def _perform_ai_review(self, repository: str, pr_number: int, pr_data: Dict[str, Any]):
-        """执行智能代码审查 - 增强版 (◕‿◕)✨"""
+        """执行智能代码审查"""
+        review_key = f"{repository}#{pr_number}"
         try:
             logger.info(f"🔍 开始智能代码审查: {repository}#{pr_number}")
             owner, repo = repository.split("/")
@@ -626,9 +652,8 @@ class WebhookProcessor:
             )
 
             if review_result:
-                if hasattr(review_result, "summary") and (
-                    "审查异常" in str(review_result.summary) or "error" in str(review_result.summary).lower()
-                ):
+                summary = review_result.get("summary", "") if isinstance(review_result, dict) else getattr(review_result, "summary", "")
+                if "审查异常" in str(summary) or "error" in str(summary).lower():
                     logger.error(f"审查处理异常: {repository}#{pr_number}")
                     repo_config = self.config_manager.get_repository_config(repository)
                     bot_username = repo_config.get("allow_review", {}).get("bot_username", "")
@@ -640,7 +665,7 @@ class WebhookProcessor:
                         f"""审查遇到了一些问题呢
 
 > [!CAUTION]
-> 🔧 **错误信息**: {review_result.summary}
+> 🔧 **错误信息**: {summary}
 
 
 ---
@@ -656,15 +681,24 @@ class WebhookProcessor:
                     if self.msg_processor:
                         try:
                             from .msg_req import MessageType
+                            if isinstance(review_result, dict):
+                                review_data = {
+                                    "overall_score": review_result.get("overall_score", 85),
+                                    "approved": review_result.get("approved", True),
+                                    "summary": review_result.get("summary", review_result.get("review_content", "AI审查完成")),
+                                    "issues_count": review_result.get("issues_count", {})
+                                }
+                            else:
+                                review_data = {
+                                    "overall_score": getattr(review_result, "overall_score", 85),
+                                    "approved": getattr(review_result, "approved", True),
+                                    "summary": getattr(review_result, "summary", getattr(review_result, "review_content", "AI审查完成")),
+                                    "issues_count": getattr(review_result, "issues_count", {})
+                                }
                             ai_review_payload = {
                                 "repository": {"full_name": repository},
                                 "pull_request": pr_data,
-                                "review_result": {
-                                    "overall_score": review_result.overall_score,
-                                    "approved": review_result.approved,
-                                    "summary": review_result.summary,
-                                    "issues_count": review_result.issues_count
-                                }
+                                "review_result": review_data
                             }
                             message_request = self.msg_processor.create_message_request(
                                 MessageType.AI_REVIEW, ai_review_payload, repository
@@ -728,6 +762,10 @@ class WebhookProcessor:
                         await api_client.remove_review_request(owner, repo, pr_number, [bot_username])
             except Exception as cleanup_error:
                 logger.error(f"清理审查请求时异常: {cleanup_error}")
+        finally:
+            # 无论成功还是失败都要从活跃审查集合中移除
+            self.active_reviews.discard(review_key)
+            logger.debug(f"已从活跃审查集合中移除: {review_key}")
 
     def get_stats(self) -> Dict[str, Any]:
         """获取处理统计信息"""

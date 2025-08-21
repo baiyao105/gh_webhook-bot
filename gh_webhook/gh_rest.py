@@ -205,58 +205,9 @@ class GitHubAPIClient:
         }
         # 关键字映射
         self.keyword_mappings = {
-            "Bug": [
-                "bug",
-                "error",
-                "错误",
-                "问题",
-                "issue",
-                "broken",
-                "坏了",
-                "不工作",
-                "crash",
-                "崩溃",
-            ],
-            "feat": [
-                "feature",
-                "enhancement",
-                "功能",
-                "改进",
-                "优化",
-                "improve",
-                "optimize",
-                "新增",
-                "feat",
-            ],
-            "Doc": ["doc", "docs", "documentation", "文档", "readme", "说明"],
-            "help+": [
-                "help",
-                "帮助",
-                "需要帮助",
-                "求助",
-                "额外关注, how to",
-                "如何",
-                "怎么",
-            ],
-            "优先级：高": [
-                "urgent",
-                "紧急",
-                "critical",
-                "严重",
-                "high priority",
-                "高优先级",
-            ],
-            "优先级：中等": ["medium priority", "中优先级", "normal", "中等"],
-            "优先级：低": ["low priority", "低优先级", "minor", "次要"],
-            "优先级：紧急": ["emergency", "紧急", "urgent", "立即", "马上"],
-            "TODO": ["todo", "待办", "计划", "将来", "future"],
-            "小组件": ["widget", "小组件", "组件", "控件"],
-            "插件": ["plugin", "插件", "扩展", "extension"],
-            "课程表": ["schedule", "课程表", "课程", "时间表", "timetable"],
-            "配置": ["config", "配置", "设置", "setting", "configuration"],
-            "UI": ["ui", "界面", "用户界面", "interface", "design", "设计"],
-            "通知提醒": ["notification", "通知", "提醒", "alert", "reminder"],
-            "Other": ["other", "其他", "杂项", "misc", "miscellaneous"],
+            "Doc": ["文档", "说明"],
+            "小组件": ["小组件", "组件", "控件"],
+            "插件": ["插件", "扩展"],
         }
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -507,17 +458,36 @@ class GitHubEventProcessor:
 
         return client
 
-    def _extract_keywords_from_text(self, text: str) -> List[str]:
-        """从文本中提取关键字"""
-        if not text:
+    def _extract_keywords_from_text(self, text: str, is_issue: bool = True) -> List[str]:
+        """从文本中提取关键字
+
+        Args:
+            text: 要分析的文本内容
+            is_issue: 是否为issue，仅对issue进行标签化处理
+        
+        Returns:
+            匹配到的标签列表
+        """
+        if not text or not is_issue:
             return []
 
-        text_lower = text.lower()
+        text_lower = text.lower().strip()
         detected_labels = []
 
-        for label_name, keywords in self.api_clients[list(self.api_clients.keys())[0]].keyword_mappings.items():
+        if not self.api_clients:
+            return []
+
+        first_client = list(self.api_clients.values())[0]
+        keyword_mappings = first_client.keyword_mappings
+        for label_name, keywords in keyword_mappings.items():
             for keyword in keywords:
-                if keyword.lower() in text_lower:
+                keyword_lower = keyword.lower().strip()
+                import re
+                pattern = r'\b' + re.escape(keyword_lower) + r'\b'
+                if any('\u4e00' <= char <= '\u9fff' for char in keyword_lower):
+                    pattern = r'(?<![\w\u4e00-\u9fff])' + re.escape(keyword_lower) + r'(?![\w\u4e00-\u9fff])'
+
+                if re.search(pattern, text_lower):
                     if label_name not in detected_labels:
                         detected_labels.append(label_name)
                     break
@@ -616,15 +586,15 @@ class GitHubEventProcessor:
             await client.create_issue_comment(owner, repo, issue_number, error_message)
             logger.info(f"发送Issue格式提醒: {owner}/{repo}#{issue_number}")
 
-        detected_labels = self._extract_keywords_from_text(f"{title} {body}")
+        detected_labels = self._extract_keywords_from_text(f"{title} {body}", is_issue=True)
 
         if detected_labels:
             await client.ensure_labels_exist(owner, repo, detected_labels)
             success = await client.add_labels_to_issue(owner, repo, issue_number, detected_labels)
             if success:
-                logger.success(f"自动添加标签成功: {owner}/{repo}#{issue_number} -> {detected_labels}")
+                logger.success(f"自动添加Issue标签成功: {owner}/{repo}#{issue_number} -> {detected_labels}")
             else:
-                logger.warning(f"自动添加标签失败: {owner}/{repo}#{issue_number}")
+                logger.warning(f"自动添加Issue标签失败: {owner}/{repo}#{issue_number}")
 
     async def _handle_issue_edited(self, client: GitHubAPIClient, owner: str, repo: str, issue: Dict[str, Any]):
         """处理Issue编辑事件"""
@@ -667,19 +637,7 @@ class GitHubEventProcessor:
             error_message += "\n\n建议修改PR内容以符合规范(当然可以忽略("
             await client.create_issue_comment(owner, repo, pr_number, error_message)
             logger.info(f"发送PR格式提醒: {owner}/{repo}#{pr_number}")
-        detected_labels = self._extract_keywords_from_text(f"{title} {body}")
-        files = await client.get_pr_files(owner, repo, pr_number)
-        file_based_labels = self._analyze_file_changes(files)
-        detected_labels.extend(file_based_labels)
-        detected_labels = list(set(detected_labels))
-
-        if detected_labels:
-            await client.ensure_labels_exist(owner, repo, detected_labels)
-            success = await client.add_labels_to_issue(owner, repo, pr_number, detected_labels)
-            if success:
-                logger.info(f"自动添加PR标签成功: {owner}/{repo}#{pr_number} -> {detected_labels}")
-            else:
-                logger.warning(f"自动添加PR标签失败: {owner}/{repo}#{pr_number}")
+        # logger.info(f"PR创建事件处理完成, 跳过标签化处理: {owner}/{repo}#{pr_number}")
 
     async def _handle_pr_updated(self, client: GitHubAPIClient, owner: str, repo: str, pr: Dict[str, Any]):
         """处理PR更新事件"""
@@ -711,8 +669,8 @@ class GitHubEventProcessor:
                 return False
             owner, repo = repo_name.split("/")
             review_body = self._format_ai_review_comment(review_result)
-            approved = review_result.approved
-            score = review_result.overall_score
+            approved = review_result.get("approved", True) if isinstance(review_result, dict) else getattr(review_result, "approved", True)
+            score = review_result.get("overall_score", 85) if isinstance(review_result, dict) else getattr(review_result, "overall_score", 85)
             if approved and score >= 90:  # APPROVE的门槛
                 event = "APPROVE"
             else:
@@ -733,10 +691,16 @@ class GitHubEventProcessor:
 
     def _format_ai_review_comment(self, review_result) -> str:
         """格式化AI审查评论"""
-        score = review_result.overall_score
-        summary = review_result.summary
-        approved = review_result.approved
-        issues_count = review_result.issues_count
+        if isinstance(review_result, dict):
+            score = review_result.get("overall_score", 85)
+            summary = review_result.get("summary", review_result.get("review_content", "AI审查完成"))
+            approved = review_result.get("approved", True)
+            issues_count = review_result.get("issues_count", {})
+        else:
+            score = getattr(review_result, "overall_score", 85)
+            summary = getattr(review_result, "summary", getattr(review_result, "review_content", "AI审查完成"))
+            approved = getattr(review_result, "approved", True)
+            issues_count = getattr(review_result, "issues_count", {})
 
         # 评分表情
         if score >= 90:

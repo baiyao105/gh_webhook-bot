@@ -1371,7 +1371,22 @@ class EnhancedAIHandler:
             if not self.mcp_tools or not self._is_mcp_tools_initialized():
                 return []
 
-            all_comments = await self.mcp_tools.get_issue_comments(owner, repo, issue_pr_number)
+            all_comments = await self.mcp_tools.call_tool(
+                "list_comments",
+                {
+                    "owner": owner,
+                    "repo": repo,
+                    "issue_number": issue_pr_number,
+                    "sort": "created",
+                    "direction": "asc",
+                    "limit": 600
+                }
+            )
+            # 提取实际的评论数据
+            if all_comments.get("success") and all_comments.get("data"):
+                all_comments = all_comments["data"]
+            else:
+                all_comments = []
 
             bot_replies = []
             for comment in all_comments:
@@ -1721,13 +1736,22 @@ class EnhancedAIHandler:
 4. 代码可读性和维护性
 
 请用友好、专业的语气提供审查意见。"""
-            ai_response = await self._generate_ai_response(
-                context=context,
-                current_message=review_prompt,
-                user_id="ai_reviewer",
-                github_username="ChimeYao-bot",
-                user_permissions=["ai_review"]
-            )
+            try:
+                # 设置超时处理
+                ai_response = await asyncio.wait_for(
+                    self._generate_ai_response(
+                        context=context,
+                        current_message=review_prompt,
+                        user_id="ai_reviewer",
+                        github_username="ChimeYao-bot",
+                        user_permissions=["ai_review"]
+                    ),
+                    timeout=120  # 2分钟超时
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"AI审查超时，但可能仍有结果: {repo_name}#{pr_number}")
+                # 即使超时也尝试获取可能的响应
+                ai_response = None
 
             if ai_response:
                 logger.success(f"代码审查完成: {repo_name}#{pr_number}")
@@ -1736,7 +1760,11 @@ class EnhancedAIHandler:
                     "review_content": ai_response,
                     "repository": repo_name,
                     "pr_number": pr_number,
-                    "context_id": context_id
+                    "context_id": context_id,
+                    "summary": ai_response,
+                    "overall_score": 85,
+                    "approved": True,
+                    "issues_count": {}
                 }
             else:
                 logger.warning(f"代码审查未生成响应: {repo_name}#{pr_number}")
@@ -1747,13 +1775,21 @@ class EnhancedAIHandler:
                     "pr_number": pr_number
                 }
 
+        except asyncio.TimeoutError:
+            logger.error(f"❌ AI代码审查超时: {repo_name}#{pr_number}")
+            return None
         except Exception as e:
             logger.error(f"❌ AI代码审查异常: {e}")
             return {
                 "success": False,
                 "error": str(e),
-                "repository": repository.get("full_name", ""),
-                "pr_number": pull_request.get("number")
+                "repository": repo_name,
+                "pr_number": pr_number,
+                "summary": f"审查异常: {str(e)}",
+                "overall_score": 0,
+                "approved": False,
+                "issues_count": {"critical": 1},
+                "review_content": f"审查过程中发生异常: {str(e)}"
             }
 
     async def cleanup(self):

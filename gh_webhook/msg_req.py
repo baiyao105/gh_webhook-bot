@@ -1479,25 +1479,34 @@ class MessageFormatter:
         )
 
     def _format_ai_review_message(self, payload: Dict[str, Any], repo_config: Dict[str, Any]) -> MessageContent:
-        """格式化代码审查消息"""
+        """格式化AI代码审查消息"""
+        # AI审查消息的payload结构可能包含审查结果、PR信息等
         pr_number = payload.get("pr_number", "Unknown")
         repository_name = payload.get("repository", {}).get("full_name", "Unknown")
         review_summary = payload.get("review_summary", "AI代码审查已完成")
         review_status = payload.get("review_status", "completed")
+        
         display_name = self._get_repo_display_name(payload, repo_config)
         timestamp = self._get_timestamp()
+        
+        # 根据审查状态设置不同的图标
         status_icon = "✅" if review_status == "approved" else "⚠️" if review_status == "changes_requested" else "🤖"
+        
         title = f"{status_icon} {display_name} ({timestamp}) AI代码审查"
         content_lines = [
             f"├─ 🔍 PR编号: #{pr_number}",
             f"├─ 📊 审查状态: {review_status}",
             f"└─ 📝 审查摘要: {review_summary}",
         ]
+        
+        # 如果有详细的审查内容，添加到metadata中
         metadata = {
             "pr_number": pr_number,
             "review_status": review_status,
             "review_summary": review_summary,
         }
+        
+        # 如果有审查详情，添加到内容中
         if "review_details" in payload:
             details = payload["review_details"]
             if isinstance(details, list) and details:
@@ -1507,7 +1516,7 @@ class MessageFormatter:
                     content_lines.append(f"  {i+1}. {detail}")
                 if len(details) > 3:
                     content_lines.append(f"  ... 还有 {len(details)-3} 条建议")
-
+        
         return MessageContent(
             title=title,
             content="\n".join(content_lines),
